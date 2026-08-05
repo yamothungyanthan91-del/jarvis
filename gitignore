@@ -1,0 +1,16 @@
+# secrets
+.env
+
+# python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# audio artifacts
+*.mp3
+*.wav
+core/__pycache__/
+
+# os junk
+.DS_Store
