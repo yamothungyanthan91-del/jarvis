@@ -72,16 +72,31 @@ class Brain:
         self._refresh_system_prompt()
         self.messages.append({"role": "user", "content": user_text})
 
-        # Route questions needing live info to the search-capable model
+        # Route questions needing live info to the search-capable model.
+        # The search model has a much smaller request-size limit, so it gets
+        # only the current question — not the full running conversation.
         needs_search = any(kw in lowered for kw in SEARCH_KEYWORDS)
-        model = SEARCH_MODEL if needs_search else GROQ_MODEL
 
-        response = client.chat.completions.create(
-            model=model,
-            messages=self.messages,
-            temperature=0.7,
-            max_tokens=512,
-        )
+        if needs_search:
+            search_messages = [
+                {"role": "system", "content": (
+                    f"You are {ASSISTANT_NAME}, a helpful assistant with live "
+                    f"web search. Answer briefly and conversationally, since "
+                    f"this will be read aloud."
+                )},
+                {"role": "user", "content": user_text},
+            ]
+            response = client.chat.completions.create(
+                model=SEARCH_MODEL,
+                messages=search_messages,
+            )
+        else:
+            response = client.chat.completions.create(
+                model=GROQ_MODEL,
+                messages=self.messages,
+                temperature=0.7,
+                max_tokens=512,
+            )
         reply = response.choices[0].message.content.strip()
 
         self.messages.append({"role": "assistant", "content": reply})
