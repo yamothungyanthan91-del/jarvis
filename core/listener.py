@@ -16,7 +16,16 @@ import subprocess
 import tempfile
 import time
 
-RECORD_SECONDS = 6  # how long Jarvis listens on Android before transcribing
+RECORD_SECONDS = 5  # how long Jarvis listens on Android before transcribing
+
+# Telling Whisper the language and giving it a short context "prompt" both
+# measurably improve accuracy — it stops guessing at the wrong language and
+# is biased toward assistant-style phrasing instead of misheard words.
+WHISPER_LANGUAGE = "en"
+WHISPER_PROMPT = (
+    "This is a voice command to a personal AI assistant named Jarvis, "
+    "spoken in a normal room."
+)
 
 
 def _is_termux() -> bool:
@@ -32,11 +41,21 @@ def _termux_listen() -> str:
 
     # termux-microphone-record returns immediately; the recording itself
     # keeps running in the background for RECORD_SECONDS, so wait it out.
+    # Explicitly requesting a high sample rate/bitrate matters a lot here —
+    # the default settings on many phones are low quality and that's a big
+    # part of why words get misheard.
     subprocess.run(
-        ["termux-microphone-record", "-f", tmp_path, "-l", str(RECORD_SECONDS)],
+        [
+            "termux-microphone-record", "-f", tmp_path,
+            "-l", str(RECORD_SECONDS),
+            "-e", "aac",
+            "-b", "192",
+            "-r", "44100",
+            "-c", "1",
+        ],
         check=False,
     )
-    time.sleep(RECORD_SECONDS + 0.5)
+    time.sleep(RECORD_SECONDS + 0.25)
     subprocess.run(["termux-microphone-record", "-q"], check=False)  # make sure it's stopped
 
     if not os.path.exists(tmp_path) or os.path.getsize(tmp_path) == 0:
@@ -48,6 +67,8 @@ def _termux_listen() -> str:
             transcription = client.audio.transcriptions.create(
                 file=(os.path.basename(tmp_path), f.read()),
                 model="whisper-large-v3-turbo",
+                language=WHISPER_LANGUAGE,
+                prompt=WHISPER_PROMPT,
             )
         text = transcription.text.strip()
         if text:
