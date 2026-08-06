@@ -2,18 +2,19 @@
 Jarvis — a personal AI voice assistant.
 Run: python main.py
 
-Jarvis keeps listening while it's talking, so you can jump in anytime:
-- Say "stop" to immediately cut off whatever it's saying.
-- Just start talking about something new — it'll follow you there, no
-  special command needed.
+Say "stop" right after Jarvis finishes a reply to skip past it, or just
+start talking about something new — no special command needed.
+Say "check my email" (or similar) to hear your unread Gmail count.
 """
 from core.brain import Brain
+from core.email_checker import check_unread_emails
 from core.listener import listen
 from core.voice import speak, stop_speaking
 from config import ASSISTANT_NAME, USER_TITLE
 
 EXIT_WORDS = {"exit", "quit", "goodbye", "shut down", "shutdown"}
 STOP_WORDS = {"stop", "stop talking", "wait", "hold on", "quiet"}
+EMAIL_KEYWORDS = ("check my email", "check email", "any emails", "my inbox", "new emails")
 
 
 def main():
@@ -36,12 +37,14 @@ def main():
             print(f"Jarvis: (stopped) Go ahead, {USER_TITLE}.")
             continue
 
-        # Anything else — including a brand new topic — just gets answered
-        # normally. Saying "stop" first cuts off the old reply; the next
-        # thing you say becomes the new question, no special phrasing needed.
+        if any(kw in cleaned for kw in EMAIL_KEYWORDS):
+            reply = check_unread_emails()
+            speak(reply)
+            continue
+
         stop_speaking()
-        reply = brain.think(user_text)
-        speak(reply)
+        for chunk in brain.think_stream(user_text):
+            speak(chunk)
 
 
 if __name__ == "__main__":
