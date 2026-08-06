@@ -19,10 +19,14 @@ from core.memory import facts_as_text, save_fact
 
 client = Groq(api_key=GROQ_API_KEY)
 
-# Keywords that suggest the question needs live/real-time info from the web
+# Specific phrases that suggest the question needs live web info.
+# Kept narrow and multi-word on purpose — a broad single word like "current"
+# or "right now" was firing on ordinary sentences (e.g. "quarantine right
+# now") and routing them to the search model by accident.
 SEARCH_KEYWORDS = (
-    "news", "today", "latest", "current", "currently", "right now",
-    "weather", "score", "stock", "price of", "who won", "happening",
+    "search for", "look up", "google ", "the news", "in the news",
+    "today's news", "latest news", "the weather", "weather today",
+    "weather like", "who won", "score of", "stock price", "price of",
 )
 
 SEARCH_MODEL = "groq/compound"  # Groq's free model with built-in web search
@@ -96,23 +100,29 @@ class Brain:
             # The search model has a small request-size limit, so it only
             # gets the current question, not the full history — and it
             # doesn't support streaming, so it's spoken as one chunk.
-            search_messages = [
-                {"role": "system", "content": (
-                    f"You are {ASSISTANT_NAME}, a helpful assistant with live "
-                    f"web search. Answer briefly and conversationally, since "
-                    f"this will be read aloud."
-                )},
-                {"role": "user", "content": user_text},
-            ]
-            response = client.chat.completions.create(
-                model=SEARCH_MODEL,
-                messages=search_messages,
-            )
-            reply = response.choices[0].message.content.strip()
-            self.messages.append({"role": "assistant", "content": reply})
-            self._trim_history()
-            yield reply
-            return
+            # If it fails for any reason, fall back to the regular model
+            # rather than crashing the whole session.
+            try:
+                search_messages = [
+                    {"role": "system", "content": (
+                        f"You are {ASSISTANT_NAME}, a helpful assistant with live "
+                        f"web search. Answer briefly and conversationally, since "
+                        f"this will be read aloud."
+                    )},
+                    {"role": "user", "content": user_text},
+                ]
+                response = client.chat.completions.create(
+                    model=SEARCH_MODEL,
+                    messages=search_messages,
+                )
+                reply = response.choices[0].message.content.strip()
+                self.messages.append({"role": "assistant", "content": reply})
+                self._trim_history()
+                yield reply
+                return
+            except Exception:
+                yield "I couldn't reach a live search just now, sir, but let me try to help anyway."
+                # falls through to the normal model below
 
         stream = client.chat.completions.create(
             model=GROQ_MODEL,
