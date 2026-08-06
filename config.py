@@ -18,6 +18,10 @@ TTS_VOICE = os.getenv("TTS_VOICE", "en-GB-RyanNeural")
 ASSISTANT_NAME = os.getenv("ASSISTANT_NAME", "Jarvis")
 USER_TITLE = os.getenv("USER_TITLE", "sir")
 
+# Optional — only needed for "check my email" to work. See core/email_checker.py.
+GMAIL_ADDRESS = os.getenv("GMAIL_ADDRESS")
+GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
+
 if not GROQ_API_KEY:
     raise RuntimeError(
         "GROQ_API_KEY not found. Copy .env.example to .env and add your key."
