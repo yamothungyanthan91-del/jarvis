@@ -2,7 +2,12 @@
 Speaks text aloud using Microsoft Edge's free neural TTS (edge-tts),
 then plays it back with a cross-platform audio player.
 
-Supports being interrupted mid-sentence (see stop_speaking()).
+IMPORTANT: speak() waits for playback to actually finish before
+returning. On a phone, the mic and speaker are right next to each
+other with no echo cancellation, so if Jarvis started listening again
+while still talking, it would hear its own voice through the speaker
+and mistake it for you talking (a feedback loop). Waiting for the
+exact audio duration to elapse before listening again prevents that.
 """
 import asyncio
 import os
@@ -10,14 +15,15 @@ import platform
 import re
 import subprocess
 import tempfile
+import time
 
 import edge_tts
+from mutagen.mp3 import MP3
 
 from config import TTS_VOICE
 
 # Tracks the currently-playing audio process (desktop only) so it can be
-# killed on command. Android playback is handled by a system service instead
-# (see stop_speaking()).
+# killed on command via stop_speaking().
 _current_process = None
 
 
@@ -41,35 +47,48 @@ def _is_termux() -> bool:
     return "ANDROID_ROOT" in os.environ or os.path.exists("/data/data/com.termux")
 
 
-def _play(path: str):
+def _audio_duration_seconds(path: str) -> float:
+    try:
+        return MP3(path).info.length
+    except Exception:
+        return 4.0  # safe fallback if duration can't be read
+
+
+def _play_and_wait(path: str):
+    """Plays the audio and blocks until it's actually finished."""
     global _current_process
     system = platform.system()
+    duration = _audio_duration_seconds(path)
+
     try:
         if _is_termux():
-            # termux-media-player returns immediately; playback runs as a
-            # background service, which is what lets us listen for "stop"
-            # while it's still talking.
             subprocess.run(["termux-media-player", "play", path], check=False)
+            # termux-media-player returns immediately even though playback
+            # continues in the background, so wait out the real duration.
+            time.sleep(duration + 0.4)
         elif system == "Darwin":
             _current_process = subprocess.Popen(["afplay", path])
+            _current_process.wait()
         elif system == "Windows":
             os.startfile(path)  # noqa: S606
+            time.sleep(duration + 0.4)
         else:  # Linux
             _current_process = subprocess.Popen(["mpg123", "-q", path])
+            _current_process.wait()
     except FileNotFoundError:
         print(f"[voice] No audio player found for this platform. "
               f"Install mpg123 (Linux) or use termux-media-player (Android). "
               f"Audio saved at: {path}")
+    finally:
+        _current_process = None
 
 
 def stop_speaking():
     """Immediately cuts off whatever Jarvis is currently saying."""
-    global _current_process
     if _is_termux():
         subprocess.run(["termux-media-player", "stop"], check=False)
     elif _current_process is not None:
         _current_process.terminate()
-        _current_process = None
 
 
 def speak(text: str):
@@ -78,4 +97,4 @@ def speak(text: str):
     with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
         out_path = tmp.name
     asyncio.run(_synthesize(clean_text, out_path))
-    _play(out_path)
+    _play_and_wait(out_path)
