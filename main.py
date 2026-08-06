@@ -22,29 +22,39 @@ def main():
     speak(f"{ASSISTANT_NAME} online. At your service, {USER_TITLE}.")
 
     while True:
-        user_text = listen()
-        if not user_text:
-            continue
+        try:
+            user_text = listen()
+            if not user_text:
+                continue
 
-        cleaned = user_text.lower().strip(".! ")
+            cleaned = user_text.lower().strip(".! ")
 
-        if cleaned in EXIT_WORDS:
+            if cleaned in EXIT_WORDS:
+                speak(f"Shutting down. Goodbye, {USER_TITLE}.")
+                break
+
+            if cleaned in STOP_WORDS:
+                stop_speaking()
+                print(f"Jarvis: (stopped) Go ahead, {USER_TITLE}.")
+                continue
+
+            if any(kw in cleaned for kw in EMAIL_KEYWORDS):
+                reply = check_unread_emails()
+                speak(reply)
+                continue
+
+            stop_speaking()
+            for chunk in brain.think_stream(user_text):
+                speak(chunk)
+
+        except KeyboardInterrupt:
             speak(f"Shutting down. Goodbye, {USER_TITLE}.")
             break
-
-        if cleaned in STOP_WORDS:
-            stop_speaking()
-            print(f"Jarvis: (stopped) Go ahead, {USER_TITLE}.")
-            continue
-
-        if any(kw in cleaned for kw in EMAIL_KEYWORDS):
-            reply = check_unread_emails()
-            speak(reply)
-            continue
-
-        stop_speaking()
-        for chunk in brain.think_stream(user_text):
-            speak(chunk)
+        except Exception as e:
+            # Never let one bad request kill the whole session — apologize
+            # and go back to listening instead of crashing to the terminal.
+            print(f"[main] Unexpected error: {e}")
+            speak(f"Apologies, {USER_TITLE}, I ran into a small problem there. Go ahead.")
 
 
 if __name__ == "__main__":
