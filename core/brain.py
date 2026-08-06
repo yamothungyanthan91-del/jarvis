@@ -7,6 +7,10 @@ Includes:
 - Real-time web info (news, current events) via Groq's "compound" model,
   which has built-in web search — automatically used when your question
   needs current information.
+- Streamed replies: think_stream() yields text sentence-by-sentence as
+  Groq generates it, so Jarvis can start speaking the first sentence
+  while the rest of the reply is still being written — this is what
+  makes responses feel noticeably faster.
 """
 from datetime import datetime
 from groq import Groq
@@ -22,6 +26,11 @@ SEARCH_KEYWORDS = (
 )
 
 SEARCH_MODEL = "groq/compound"  # Groq's free model with built-in web search
+
+# A chunk gets spoken once it ends with one of these AND has enough
+# content to be worth a separate TTS call (avoids choppy one-word audio).
+SENTENCE_ENDERS = (".", "!", "?", "\n")
+MIN_CHUNK_LEN = 12
 
 
 def _build_system_prompt() -> str:
@@ -56,9 +65,17 @@ class Brain:
         # Rebuild each turn so date/time and memory stay current
         self.messages[0] = {"role": "system", "content": _build_system_prompt()}
 
-    def think(self, user_text: str) -> str:
-        # "remember that ..." / "remember I ..." saves a fact for next time
+    def _trim_history(self):
+        if len(self.messages) > self.history_limit:
+            self.messages = [self.messages[0]] + self.messages[-(self.history_limit - 1):]
+
+    def think_stream(self, user_text: str):
+        """Yields the reply in speakable chunks (roughly one sentence at a
+        time) as soon as each chunk is ready, instead of waiting for the
+        entire reply to finish generating."""
         lowered = user_text.lower().strip()
+
+        # "remember that ..." saves a fact — short-circuit, nothing to stream
         if lowered.startswith("remember that ") or lowered.startswith("remember "):
             fact = user_text.split(" ", 1)[1]
             if fact.lower().startswith("that "):
@@ -67,17 +84,18 @@ class Brain:
             reply = f"Noted, {USER_TITLE}. I'll remember that {fact}."
             self.messages.append({"role": "user", "content": user_text})
             self.messages.append({"role": "assistant", "content": reply})
-            return reply
+            yield reply
+            return
 
         self._refresh_system_prompt()
         self.messages.append({"role": "user", "content": user_text})
 
-        # Route questions needing live info to the search-capable model.
-        # The search model has a much smaller request-size limit, so it gets
-        # only the current question — not the full running conversation.
         needs_search = any(kw in lowered for kw in SEARCH_KEYWORDS)
 
         if needs_search:
+            # The search model has a small request-size limit, so it only
+            # gets the current question, not the full history — and it
+            # doesn't support streaming, so it's spoken as one chunk.
             search_messages = [
                 {"role": "system", "content": (
                     f"You are {ASSISTANT_NAME}, a helpful assistant with live "
@@ -90,19 +108,39 @@ class Brain:
                 model=SEARCH_MODEL,
                 messages=search_messages,
             )
-        else:
-            response = client.chat.completions.create(
-                model=GROQ_MODEL,
-                messages=self.messages,
-                temperature=0.7,
-                max_tokens=512,
-            )
-        reply = response.choices[0].message.content.strip()
+            reply = response.choices[0].message.content.strip()
+            self.messages.append({"role": "assistant", "content": reply})
+            self._trim_history()
+            yield reply
+            return
 
-        self.messages.append({"role": "assistant", "content": reply})
+        stream = client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=self.messages,
+            temperature=0.7,
+            max_tokens=512,
+            stream=True,
+        )
 
-        # keep the context window small so requests stay fast/cheap
-        if len(self.messages) > self.history_limit:
-            self.messages = [self.messages[0]] + self.messages[-(self.history_limit - 1):]
+        buffer = ""
+        full_reply = ""
+        for chunk in stream:
+            delta = chunk.choices[0].delta.content or ""
+            if not delta:
+                continue
+            buffer += delta
+            full_reply += delta
+            if buffer.rstrip().endswith(SENTENCE_ENDERS) and len(buffer.strip()) >= MIN_CHUNK_LEN:
+                yield buffer.strip()
+                buffer = ""
 
-        return reply
+        if buffer.strip():
+            yield buffer.strip()
+
+        self.messages.append({"role": "assistant", "content": full_reply})
+        self._trim_history()
+
+    def think(self, user_text: str) -> str:
+        """Non-streaming convenience wrapper — collects the full reply.
+        Prefer think_stream() for anything spoken aloud."""
+        return " ".join(self.think_stream(user_text))
